@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS products (
     ) STORED,
     rating         DECIMAL(2,1)  DEFAULT NULL,
     is_active      TINYINT(1)    NOT NULL DEFAULT 1,
+    discount_percentage DECIMAL(5,2) NOT NULL DEFAULT 0,
+    is_on_sale     TINYINT(1) GENERATED ALWAYS AS (
+        CASE WHEN discount_percentage > 0 THEN 1 ELSE 0 END
+    ) STORED,
     created_at     DATETIME      DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -29,10 +33,15 @@ DELIMITER $$
 
 -- 1. Create Product
 CREATE PROCEDURE sp_CreateProduct(IN p_sku VARCHAR(100), IN p_name VARCHAR(255),
-    IN p_category VARCHAR(100), IN p_brand VARCHAR(100), IN p_price DECIMAL(10,2), IN p_stock INT, IN p_rating DECIMAL(2,1))
+    IN p_category VARCHAR(100), IN p_brand VARCHAR(100), IN p_price DECIMAL(10,2), IN p_stock INT, IN p_rating DECIMAL(2,1), IN p_discount_percentage DECIMAL(5,2))
 BEGIN
-    INSERT INTO products (sku, name, category, brand, price, stock, rating)
-    VALUES (p_sku, p_name, p_category, p_brand, p_price, p_stock, p_rating);
+    INSERT INTO products (sku, name, category, brand, price, stock, rating, discount_percentage)
+    VALUES (p_sku, p_name, p_category, p_brand, p_price, p_stock, p_rating, 
+        CASE 
+            WHEN p_discount_percentage < 0 THEN 0
+            WHEN p_discount_percentage > 100 THEN 100
+            ELSE p_discount_percentage
+        END);
     SELECT LAST_INSERT_ID() AS new_product_id;
 END $$
 
@@ -45,7 +54,8 @@ BEGIN
             WHEN price >= 1000 AND price <= 5000 THEN 'midrange'
             WHEN price > 5000 THEN 'expensive'
             ELSE NULL
-        END AS price_category
+        END AS price_category,
+        CASE WHEN discount_percentage > 0 THEN 1 ELSE 0 END AS is_on_sale
     FROM products WHERE product_id = p_product_id;
 END $$
 
@@ -58,16 +68,23 @@ BEGIN
             WHEN price >= 1000 AND price <= 5000 THEN 'midrange'
             WHEN price > 5000 THEN 'expensive'
             ELSE NULL
-        END AS price_category
+        END AS price_category,
+        discount_percentage,
+        CASE WHEN discount_percentage > 0 THEN 1 ELSE 0 END AS is_on_sale
     FROM products WHERE is_active = 1 ORDER BY created_at DESC;
 END $$
 
 -- 4. Update Product
 CREATE PROCEDURE sp_UpdateProduct(IN p_product_id INT, IN p_name VARCHAR(255),
-    IN p_price DECIMAL(10,2), IN p_stock INT, IN p_rating DECIMAL(2,1))
+    IN p_price DECIMAL(10,2), IN p_stock INT, IN p_rating DECIMAL(2,1), IN p_discount_percentage DECIMAL(5,2))
 BEGIN
     UPDATE products
-    SET name = p_name, price = p_price, stock = p_stock, rating = p_rating
+    SET name = p_name, price = p_price, stock = p_stock, rating = p_rating,
+        discount_percentage = CASE 
+            WHEN p_discount_percentage < 0 THEN 0
+            WHEN p_discount_percentage > 100 THEN 100
+            ELSE p_discount_percentage
+        END
     WHERE product_id = p_product_id;
 END $$
 
@@ -96,7 +113,9 @@ BEGIN
             WHEN price >= 1000 AND price <= 5000 THEN 'midrange'
             WHEN price > 5000 THEN 'expensive'
             ELSE NULL
-        END AS price_category
+        END AS price_category,
+        discount_percentage,
+        CASE WHEN discount_percentage > 0 THEN 1 ELSE 0 END AS is_on_sale
     FROM products
     WHERE is_active = 1 AND (name LIKE CONCAT('%', p_keyword, '%') OR brand LIKE CONCAT('%', p_keyword, '%'));
 END $$
@@ -106,10 +125,10 @@ DELIMITER ;
 -- ================================================
 -- USAGE EXAMPLES
 -- ================================================
--- CALL sp_CreateProduct('SKU-001', 'Running Shoes', 'Footwear', 'Nike', 2999.00, 50, 4.5);
+-- CALL sp_CreateProduct('SKU-001', 'Running Shoes', 'Footwear', 'Nike', 2999.00, 50, 4.5, 10);
 -- CALL sp_GetProduct(1);
 -- CALL sp_ListProducts();
--- CALL sp_UpdateProduct(1, 'Running Shoes Pro', 3499.00, 45, 4.7);
+-- CALL sp_UpdateProduct(1, 'Running Shoes Pro', 3499.00, 45, 4.7, 15);
 -- CALL sp_UpdateStock(1, -3);
 -- CALL sp_SearchProducts('Nike');
 -- CALL sp_DeleteProduct(1);
