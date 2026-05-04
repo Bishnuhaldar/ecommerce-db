@@ -9,6 +9,15 @@ CREATE TABLE IF NOT EXISTS products (
     brand          VARCHAR(100),
     price          DECIMAL(10,2) NOT NULL,
     stock          INT           NOT NULL DEFAULT 0,
+    stock_status   VARCHAR(20)   GENERATED ALWAYS AS (
+        CASE 
+            WHEN stock > 10 THEN 'in_stock'
+            WHEN stock BETWEEN 1 AND 10 THEN 'low_stock'
+            WHEN stock = 0 THEN 'out_of_stock'
+            ELSE NULL
+        END
+    ) STORED,
+    restock_date   DATE DEFAULT NULL,
     price_category VARCHAR(10)   GENERATED ALWAYS AS (
         CASE 
             WHEN price < 1000 THEN 'cheap'
@@ -29,10 +38,10 @@ DELIMITER $$
 
 -- 1. Create Product
 CREATE PROCEDURE sp_CreateProduct(IN p_sku VARCHAR(100), IN p_name VARCHAR(255),
-    IN p_category VARCHAR(100), IN p_brand VARCHAR(100), IN p_price DECIMAL(10,2), IN p_stock INT, IN p_rating DECIMAL(2,1))
+    IN p_category VARCHAR(100), IN p_brand VARCHAR(100), IN p_price DECIMAL(10,2), IN p_stock INT, IN p_rating DECIMAL(2,1), IN p_restock_date DATE)
 BEGIN
-    INSERT INTO products (sku, name, category, brand, price, stock, rating)
-    VALUES (p_sku, p_name, p_category, p_brand, p_price, p_stock, p_rating);
+    INSERT INTO products (sku, name, category, brand, price, stock, rating, restock_date)
+    VALUES (p_sku, p_name, p_category, p_brand, p_price, p_stock, p_rating, p_restock_date);
     SELECT LAST_INSERT_ID() AS new_product_id;
 END $$
 
@@ -52,7 +61,7 @@ END $$
 -- 3. List All Active Products
 CREATE PROCEDURE sp_ListProducts()
 BEGIN
-    SELECT product_id, sku, name, category, brand, price, stock, rating,
+    SELECT product_id, sku, name, category, brand, price, stock, stock_status, restock_date, rating,
         CASE 
             WHEN price < 1000 THEN 'cheap'
             WHEN price >= 1000 AND price <= 5000 THEN 'midrange'
@@ -64,21 +73,47 @@ END $$
 
 -- 4. Update Product
 CREATE PROCEDURE sp_UpdateProduct(IN p_product_id INT, IN p_name VARCHAR(255),
-    IN p_price DECIMAL(10,2), IN p_stock INT, IN p_rating DECIMAL(2,1))
+    IN p_price DECIMAL(10,2), IN p_stock INT, IN p_rating DECIMAL(2,1), IN p_restock_date DATE)
 BEGIN
+    DECLARE v_old_stock INT;
+    DECLARE v_old_status VARCHAR(20);
+    DECLARE v_new_status VARCHAR(20);
+    SELECT stock, stock_status INTO v_old_stock, v_old_status FROM products WHERE product_id = p_product_id;
+    SET v_new_status = CASE 
+        WHEN p_stock > 10 THEN 'in_stock'
+        WHEN p_stock BETWEEN 1 AND 10 THEN 'low_stock'
+        WHEN p_stock = 0 THEN 'out_of_stock'
+        ELSE NULL
+    END;
     UPDATE products
-    SET name = p_name, price = p_price, stock = p_stock, rating = p_rating
+    SET name = p_name, price = p_price, stock = p_stock, rating = p_rating,
+        restock_date = IF(v_old_status = 'out_of_stock' AND v_new_status <> 'out_of_stock', NULL, p_restock_date)
     WHERE product_id = p_product_id;
 END $$
 
 -- 5. Update Stock
-CREATE PROCEDURE sp_UpdateStock(IN p_product_id INT, IN p_delta INT)
+CREATE PROCEDURE sp_UpdateStock(IN p_product_id INT, IN p_delta INT, IN p_restock_date DATE)
 BEGIN
-    IF (SELECT stock FROM products WHERE product_id = p_product_id) + p_delta < 0 THEN
+    DECLARE v_old_stock INT;
+    DECLARE v_new_stock INT;
+    DECLARE v_old_status VARCHAR(20);
+    DECLARE v_new_status VARCHAR(20);
+    SELECT stock, stock_status INTO v_old_stock, v_old_status FROM products WHERE product_id = p_product_id;
+    SET v_new_stock = v_old_stock + p_delta;
+    IF v_new_stock < 0 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Insufficient stock';
     END IF;
-    UPDATE products SET stock = stock + p_delta WHERE product_id = p_product_id;
-    SELECT stock AS updated_stock FROM products WHERE product_id = p_product_id;
+    SET v_new_status = CASE 
+        WHEN v_new_stock > 10 THEN 'in_stock'
+        WHEN v_new_stock BETWEEN 1 AND 10 THEN 'low_stock'
+        WHEN v_new_stock = 0 THEN 'out_of_stock'
+        ELSE NULL
+    END;
+    UPDATE products 
+    SET stock = v_new_stock,
+        restock_date = IF(v_old_status = 'out_of_stock' AND v_new_status <> 'out_of_stock', NULL, p_restock_date)
+    WHERE product_id = p_product_id;
+    SELECT stock AS updated_stock, stock_status, restock_date FROM products WHERE product_id = p_product_id;
 END $$
 
 -- 6. Soft Delete Product
@@ -90,7 +125,7 @@ END $$
 -- 7. Search Products
 CREATE PROCEDURE sp_SearchProducts(IN p_keyword VARCHAR(100))
 BEGIN
-    SELECT product_id, sku, name, brand, price, stock, rating,
+    SELECT product_id, sku, name, brand, price, stock, stock_status, restock_date, rating,
         CASE 
             WHEN price < 1000 THEN 'cheap'
             WHEN price >= 1000 AND price <= 5000 THEN 'midrange'
@@ -106,10 +141,10 @@ DELIMITER ;
 -- ================================================
 -- USAGE EXAMPLES
 -- ================================================
--- CALL sp_CreateProduct('SKU-001', 'Running Shoes', 'Footwear', 'Nike', 2999.00, 50, 4.5);
+-- CALL sp_CreateProduct('SKU-001', 'Running Shoes', 'Footwear', 'Nike', 2999.00, 50, 4.5, NULL);
 -- CALL sp_GetProduct(1);
 -- CALL sp_ListProducts();
--- CALL sp_UpdateProduct(1, 'Running Shoes Pro', 3499.00, 45, 4.7);
--- CALL sp_UpdateStock(1, -3);
+-- CALL sp_UpdateProduct(1, 'Running Shoes Pro', 3499.00, 45, 4.7, NULL);
+-- CALL sp_UpdateStock(1, -3, NULL);
 -- CALL sp_SearchProducts('Nike');
 -- CALL sp_DeleteProduct(1);
